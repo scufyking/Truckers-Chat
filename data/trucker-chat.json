@@ -1,0 +1,98 @@
+{
+  "twitch": {
+    "enabled": false,
+    "channel": "",
+    "username": "",
+    "oauthToken": ""
+  },
+  "youtube": {
+    "enabled": false,
+    "mode": "auto",
+    "apiKey": "",
+    "video": "",
+    "channel": "",
+    "pollSeconds": 12,
+    "searchMinutes": 5,
+    "showBacklog": false
+  },
+  "display": {
+    "enabled": true,
+    "alwaysVisible": false,
+    "mode": "card",
+    "durationSeconds": 7,
+    "minIntervalSeconds": 1.5,
+    "listSize": 4,
+    "listLines": 2,
+    "maxQueue": 8,
+    "maxTextLength": 200,
+    "maxLines": 5,
+    "longText": "truncate",
+    "scrollSeconds": 1.6,
+    "showPlatform": true,
+    "userColors": true,
+    "showStatus": true,
+    "emoji": "keep",
+    "emojiReplacement": "□",
+    "powerSource": "ignition",
+    "textScale": 1.0,
+    "fallbackFonts": ["Segoe UI", "Segoe UI Symbol", "Segoe UI Emoji", "Nirmala UI", "Yu Gothic UI", "Microsoft YaHei UI", "Malgun Gothic", "Leelawadee UI", "Ebrima", "Gadugi", "Segoe UI Historic", "Arial Unicode MS"]
+  },
+  "screen": {
+    "enabled": true,
+    "width": 1024,
+    "height": 1024,
+    "format": 29,
+    "flipY": true,
+    "flipX": false,
+    "areaX": 0.1,
+    "areaY": 0.3,
+    "areaW": 0.8,
+    "areaH": 0.4,
+    "probe": false,
+    "probeSeconds": 5,
+    "grid": false,
+    "background": 1.0,
+    "radioCoexist": "yield",
+    "radioModule": "realistic-radio.dll"
+  },
+  "overlay": {
+    "enabled": false,
+    "mode": "auto",
+    "position": "top-center",
+    "offsetX": 0.0,
+    "offsetY": 0.02,
+    "scale": 1.0,
+    "width": 0.62,
+    "background": 0.82,
+    "durationSeconds": 10
+  },
+  "filters": {
+    "hideCommands": true,
+    "commandPrefixes": ["!"],
+    "ignoreUsers": ["nightbot", "streamelements", "streamlabs", "moobot", "fossabot", "wizebot", "soundalerts", "botrixoficial", "sery_bot"],
+    "blockedWords": [],
+    "blockedWordsAction": "hide",
+    "links": "mask",
+    "linkText": "[Link]",
+    "showSuperChats": true
+  },
+  "keys": {
+    "toggle": "Ctrl+Shift+C",
+    "replay": "Ctrl+Shift+R",
+    "pause": "Ctrl+Shift+P",
+    "youtubeLink": "Ctrl+Shift+Y",
+    "menu": "Ctrl+9",
+    "pin": "Ctrl+Shift+D"
+  },
+  "buttons": {
+    "toggle": -1,
+    "replay": -1,
+    "pause": -1,
+    "youtubeLink": -1,
+    "menu": -1,
+    "pin": -1
+  },
+  "controllerIndex": 0,
+  "onlyWhenGameFocused": true,
+  "logMessages": false
+}

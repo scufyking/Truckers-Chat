@@ -1,0 +1,32 @@
+// Data files embedded into trucker-chat.dll (extracted to <plugins>\trucker-chat\ on first start)
+#include <winver.h>
+201 RCDATA "@TC_DATA@/fonts/Inter-Regular.otf"
+202 RCDATA "@TC_DATA@/fonts/Inter-Bold.otf"
+203 RCDATA "@TC_DATA@/fonts/OFL.txt"
+204 RCDATA "@TC_DATA@/trucker-chat.json"
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION @TC_VERSION_COMMAS@
+ PRODUCTVERSION @TC_VERSION_COMMAS@
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE VFT_DLL
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "CompanyName", "ScufyKing"
+      VALUE "FileDescription", "Trucker Chat - stream chat on the truck screen (ETS2/ATS telemetry plugin)"
+      VALUE "FileVersion", "@TC_VERSION_LABEL@"
+      VALUE "InternalName", "trucker-chat"
+      VALUE "LegalCopyright", "Copyright (c) 2026 ScufyKing, MPL-2.0"
+      VALUE "OriginalFilename", "trucker-chat.dll"
+      VALUE "ProductName", "Trucker Chat"
+      VALUE "ProductVersion", "@TC_VERSION_LABEL@"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x409, 1200
+  END
+END
