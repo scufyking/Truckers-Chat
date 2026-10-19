@@ -28,7 +28,7 @@ long long D3D11Frames();
 long long OtherFrames();
 int ScreenHeight();
 // in-cab screen
-void EnableScreenHook(bool on);  // before Install()
+void EnableScreenHook(bool on);  // before Install() or later (hooks on the next frame)
 void SetScreenImage(std::shared_ptr<const Image> img);
 void SetScreenTarget(int w, int h, int format);   // 0,0 = none; format 0 = any
 void SetScreenAlpha(float a);
@@ -38,9 +38,4 @@ struct RenderTargetStat { int w, h, format; long long binds; };
 std::vector<RenderTargetStat> TakeTargetStats();
 bool ScreenHookActive();
 long long RenderTargetCalls();
-// Realistic Radio detection: draw calls coming from the given module into a render target of the screen size are
-// remembered (ID3D11DeviceContext::Draw is hooked only while a module range is set). Returns GetTickCount64() of the
-// last such draw, 0 = never.
-void SetForeignModule(uintptr_t base, uintptr_t end);
-unsigned long long ForeignScreenDrawAt();
 }

@@ -6,6 +6,7 @@
 #include "Logger.h"
 #include "json.hpp"
 #include <fstream>
+#include <filesystem>   // wide paths (libc++ has no wstring constructor)
 #include <sstream>
 #include <algorithm>
 
@@ -95,9 +96,9 @@ bool Config::Load(const std::wstring& path, const std::string& defaultsJson) {
     json merged = json::parse(defaultsJson, nullptr, false);
     if (merged.is_discarded()) { Log::Write("Config: embedded defaults are invalid"); merged = json::object(); }
     bool ok = true;
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(std::filesystem::path(path), std::ios::binary);
     if (!in) {
-        std::ofstream out(path, std::ios::binary);
+        std::ofstream out(std::filesystem::path(path), std::ios::binary);
         out << defaultsJson;
         Log::Write("Config: created %s with default values - enter your Twitch channel / YouTube data there", WideToUtf8(path).c_str());
     } else {
@@ -116,7 +117,8 @@ bool Config::Load(const std::wstring& path, const std::string& defaultsJson) {
     Get(y, "pollSeconds", youtube.pollSeconds); Get(y, "searchMinutes", youtube.searchMinutes); Get(y, "showBacklog", youtube.showBacklog);
     youtube.pollSeconds = Clamp(youtube.pollSeconds, 2.0, 120.0); youtube.searchMinutes = Clamp(youtube.searchMinutes, 1.0, 120.0);
     const json& d = Sec(merged, "display");
-    Get(d, "enabled", display.enabled); Get(d, "alwaysVisible", display.alwaysVisible); Get(d, "mode", display.mode); Get(d, "durationSeconds", display.durationSeconds); Get(d, "minIntervalSeconds", display.minIntervalSeconds);
+    Get(d, "enabled", display.enabled); Get(d, "target", display.target);
+    if (display.target != "side" && display.target != "both") display.target = "screen"; Get(d, "alwaysVisible", display.alwaysVisible); Get(d, "mode", display.mode); Get(d, "durationSeconds", display.durationSeconds); Get(d, "minIntervalSeconds", display.minIntervalSeconds);
     Get(d, "listSize", display.listSize); Get(d, "listLines", display.listLines); Get(d, "maxQueue", display.maxQueue);
     Get(d, "maxTextLength", display.maxTextLength); Get(d, "maxLines", display.maxLines); Get(d, "longText", display.longText);
     Get(d, "scrollSeconds", display.scrollSeconds); Get(d, "showPlatform", display.showPlatform); Get(d, "userColors", display.userColors);
@@ -132,7 +134,7 @@ bool Config::Load(const std::wstring& path, const std::string& defaultsJson) {
     Get(s, "enabled", screen.enabled); Get(s, "width", screen.width); Get(s, "height", screen.height); Get(s, "format", screen.format);
     Get(s, "flipY", screen.flipY); Get(s, "flipX", screen.flipX); Get(s, "areaX", screen.areaX); Get(s, "areaY", screen.areaY);
     Get(s, "areaW", screen.areaW); Get(s, "areaH", screen.areaH); Get(s, "probe", screen.probe); Get(s, "probeSeconds", screen.probeSeconds);
-    Get(s, "grid", screen.grid); Get(s, "background", screen.background); Get(s, "radioCoexist", screen.radioCoexist); Get(s, "radioModule", screen.radioModule);
+    Get(s, "grid", screen.grid); Get(s, "background", screen.background); Get(s, "radioCoexist", screen.radioCoexist); Get(s, "radioModule", screen.radioModule); Get(s, "followRadio", screen.followRadio);
     screen.areaX = Clamp(screen.areaX, 0.0, 1.0); screen.areaY = Clamp(screen.areaY, 0.0, 1.0);
     screen.areaW = Clamp(screen.areaW, 0.01, 1.0 - screen.areaX); screen.areaH = Clamp(screen.areaH, 0.01, 1.0 - screen.areaY);
     screen.background = Clamp(screen.background, 0.0, 1.0); screen.probeSeconds = Clamp(screen.probeSeconds, 1.0, 60.0);
@@ -141,6 +143,13 @@ bool Config::Load(const std::wstring& path, const std::string& defaultsJson) {
     Get(o, "offsetY", overlay.offsetY); Get(o, "scale", overlay.scale); Get(o, "width", overlay.width); Get(o, "background", overlay.background);
     Get(o, "durationSeconds", overlay.durationSeconds);
     overlay.scale = Clamp(overlay.scale, 0.3, 4.0); overlay.width = Clamp(overlay.width, 0.2, 1.7); overlay.background = Clamp(overlay.background, 0.0, 1.0);
+    const json& sd = Sec(merged, "side");
+    Get(sd, "lines", side.lines); Get(sd, "linesPerMessage", side.linesPerMessage); Get(sd, "offsetX", side.offsetX); Get(sd, "offsetY", side.offsetY);
+    Get(sd, "scale", side.scale); Get(sd, "width", side.width); Get(sd, "background", side.background);
+    Get(sd, "showTime", side.showTime); Get(sd, "showTag", side.showTag);
+    side.lines = Clamp(side.lines, 1, 20); side.linesPerMessage = Clamp(side.linesPerMessage, 1, 6);
+    side.scale = Clamp(side.scale, 0.4, 3.0); side.width = Clamp(side.width, 0.2, 1.7); side.background = Clamp(side.background, 0.0, 1.0);
+    side.offsetX = Clamp(side.offsetX, 0.0, 1.5); side.offsetY = Clamp(side.offsetY, 0.0, 0.95);
     const json& f = Sec(merged, "filters");
     Get(f, "hideCommands", filters.hideCommands); GetList(f, "commandPrefixes", filters.commandPrefixes); GetList(f, "ignoreUsers", filters.ignoreUsers);
     GetList(f, "blockedWords", filters.blockedWords); Get(f, "blockedWordsAction", filters.blockedWordsAction); Get(f, "links", filters.links);

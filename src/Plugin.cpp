@@ -18,8 +18,10 @@
 #include "D3D11Overlay.h"
 #include "YouTubeProtocol.h"
 #include "MenuWindow.h"
+#include "RadioLink.h"
 #include "json.hpp"
 #include <fstream>
+#include <filesystem>   // wide paths (libc++ has no wstring constructor)
 #include <sstream>
 #include <scssdk_telemetry.h>
 #include <eurotrucks2/scssdk_eut2.h>
@@ -28,6 +30,7 @@
 #include <common/scssdk_telemetry_common_channels.h>
 #include <common/scssdk_telemetry_truck_common_channels.h>
 #include <memory>
+#include <algorithm>
 #include <cmath>
 
 namespace {
@@ -45,17 +48,6 @@ SCSAPI_VOID OnEvent(const scs_event_t event, const void* const, const scs_contex
     else if (event == SCS_TELEMETRY_EVENT_started) g_paused = false;
 }
 
-// address range of another loaded module (for the Realistic Radio coexistence check)
-bool ModuleRange(const std::wstring& name, uintptr_t& lo, uintptr_t& hi) {
-    HMODULE m = GetModuleHandleW(name.c_str());
-    if (!m) return false;
-    auto* dos = (const IMAGE_DOS_HEADER*)m;
-    if (dos->e_magic != IMAGE_DOS_SIGNATURE) return false;
-    auto* nt = (const IMAGE_NT_HEADERS*)((const char*)m + dos->e_lfanew);
-    if (nt->Signature != IMAGE_NT_SIGNATURE) return false;
-    lo = (uintptr_t)m; hi = lo + nt->OptionalHeader.SizeOfImage;
-    return true;
-}
 
 
 // --- YouTube stream link without editing the config: youtube-stream.txt or Ctrl+Shift+Y (clipboard) -------------
@@ -71,7 +63,7 @@ std::string ReadStreamFile(const std::wstring& path, FILETIME* written) {
     WIN32_FILE_ATTRIBUTE_DATA a{};
     if (!GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &a)) return "";
     if (written) *written = a.ftLastWriteTime;
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(std::filesystem::path(path), std::ios::binary);
     std::stringstream ss; ss << in.rdbuf();
     std::string line, all = ss.str();
     std::istringstream ls(all);
@@ -85,7 +77,7 @@ std::string ReadStreamFile(const std::wstring& path, FILETIME* written) {
 }
 
 void WriteStreamFile(const std::wstring& path, const std::string& url) {
-    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    std::ofstream out(std::filesystem::path(path), std::ios::binary | std::ios::trunc);
     out << kStreamTemplate << url << "\r\n";
 }
 
@@ -113,7 +105,7 @@ void StatusCard(ChatHub& hub, const std::string& text) {
 // Writes the menu's settings into the user's trucker-chat.json (other keys and values stay as they are).
 bool SaveSettings(const std::wstring& path, const MenuSettings& m, std::string& error) {
     nlohmann::json j = nlohmann::json::object();
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(std::filesystem::path(path), std::ios::binary);
     if (in) {
         std::stringstream ss; ss << in.rdbuf();
         j = nlohmann::json::parse(ss.str(), nullptr, false, true);
@@ -128,6 +120,8 @@ bool SaveSettings(const std::wstring& path, const MenuSettings& m, std::string& 
     j["display"]["alwaysVisible"] = m.pinned;
     if (!j.contains("overlay") || !j["overlay"].is_object()) j["overlay"] = nlohmann::json::object();
     j["display"]["durationSeconds"] = m.durationSeconds;
+    static const char* kTargets[] = {"screen", "side", "both"};
+    j["display"]["target"] = kTargets[std::clamp(m.target, 0, 2)];
     j["overlay"]["durationSeconds"] = m.durationSeconds;
     j["twitch"]["enabled"] = m.twitchOn;
     j["twitch"]["channel"] = m.twitchChannel;
@@ -137,7 +131,7 @@ bool SaveSettings(const std::wstring& path, const MenuSettings& m, std::string& 
     std::string text = j.dump(2);
     std::wstring tmp = path + L".tmp";
     {
-        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+        std::ofstream out(std::filesystem::path(tmp), std::ios::binary | std::ios::trunc);
         out << text;
         if (!out) { error = "trucker-chat.json konnte nicht geschrieben werden"; return false; }
     }
@@ -151,6 +145,12 @@ DWORD ChatThread(void*) {
     Config cfg;
     if (!cfg.Load(configFile, EmbeddedText(kResDefaultConfig)))
         Log::Write("Fix the JSON error in %ls and restart the game (the file was NOT overwritten)", Names::kConfigFile);
+    // Realistic Radio 1.4.3+ in the game? Then it draws the chat with its own Direct3D hook (two hooks can crash the game)
+    RadioLink::State link = RadioLink::Connect(Utf8ToWide(cfg.screen.radioModule), [] { return g_quit.load(); });
+    if (link == RadioLink::State::OldRadio && cfg.display.target != "side") {
+        Log::Write("Display: side chat for this session (truck screen needs Realistic Radio 1.4.3 or newer)");
+        cfg.display.target = "side";
+    }
     auto* hub = new ChatHub();   // deleted at the end only if every source thread has finished
     ChatDisplay display;
     display.Init(cfg, dir);
@@ -189,10 +189,7 @@ DWORD ChatThread(void*) {
     };
     startSources();
 
-    const bool watchRadio = cfg.screen.enabled && cfg.screen.radioCoexist == "yield" && !cfg.screen.radioModule.empty();
-    const std::wstring radioModule = Utf8ToWide(cfg.screen.radioModule);
-    bool radioSeen = false;
-    ULONGLONG nextRadioCheck = 0, nextStreamCheck = 0;
+    ULONGLONG nextStreamCheck = 0;
 
     // returns false if the text holds no YouTube link
     auto useLinkText = [&](const std::string& text, const char* from) {
@@ -212,6 +209,7 @@ DWORD ChatThread(void*) {
         m.chatOn = display.Enabled();
         m.pinned = display.Pinned();
         m.durationSeconds = (int)std::lround(cfg.display.durationSeconds);
+        m.target = display.Target() == "side" ? 1 : display.Target() == "both" ? 2 : 0;
         m.twitchOn = cfg.twitch.enabled; m.twitchChannel = cfg.twitch.channel;
         m.youtubeOn = cfg.youtube.enabled; m.youtubeKey = cfg.youtube.apiKey;
         m.streamLink = streamId.empty() ? "" : "https://www.youtube.com/watch?v=" + streamId;
@@ -230,6 +228,14 @@ DWORD ChatThread(void*) {
         cfg.display.alwaysVisible = on;
         std::string err;
         menu.SetNote(SaveSettings(configFile, currentSettings(), err) ? (on ? L"Dauerhaft eingeblendet" : L"Nur neue Nachrichten") : Utf8ToWide(err));
+    };
+    menu.onTarget = [&](int t) {
+        static const char* kTargets[] = {"screen", "side", "both"};
+        cfg.display.target = kTargets[std::clamp(t, 0, 2)];
+        display.SetTarget(cfg.display.target);
+        static const wchar_t* kNames[] = {L"Anzeige: Navi", L"Anzeige: Seitenchat", L"Anzeige: Navi + Seitenchat"};
+        std::string err;
+        menu.SetNote(SaveSettings(configFile, currentSettings(), err) ? kNames[std::clamp(t, 0, 2)] : Utf8ToWide(err));
     };
     menu.onDuration = [&](int secs) {
         cfg.display.durationSeconds = secs;
@@ -254,6 +260,11 @@ DWORD ChatThread(void*) {
         display.SetPinned(m.pinned);
         cfg.display.durationSeconds = cfg.overlay.durationSeconds = m.durationSeconds;
         display.SetDuration(m.durationSeconds);
+        {
+            static const char* kTargets[] = {"screen", "side", "both"};
+            cfg.display.target = kTargets[std::clamp(m.target, 0, 2)];
+            if (display.Target() != cfg.display.target) display.SetTarget(cfg.display.target);
+        }
         cfg.twitch.enabled = m.twitchOn; cfg.twitch.channel = m.twitchChannel;
         cfg.youtube.enabled = m.youtubeOn; cfg.youtube.apiKey = m.youtubeKey;
         if (m.menuKey.vk) cfg.keys[(int)Action::Menu] = m.menuKey;
@@ -306,23 +317,16 @@ DWORD ChatThread(void*) {
         }
         if (statusChanged) menu.SetStatus(stTwitch, stYouTube);
         for (auto* s : sources) s->Tick();
-        if (watchRadio && now >= nextRadioCheck) {
-            nextRadioCheck = now + 2000;
-            uintptr_t lo = 0, hi = 0;
-            bool found = ModuleRange(radioModule, lo, hi);
-            if (found != radioSeen) {
-                radioSeen = found;
-                Log::Write(found ? "Realistic Radio (%s) is loaded: the chat steps aside while the radio shows its station card"
-                                 : "Realistic Radio (%s) is not loaded", cfg.screen.radioModule.c_str());
-                D3D11Overlay::SetForeignModule(found ? lo : 0, found ? hi : 0);
-            }
-        }
         GameState gs;
         const std::string& ps = cfg.display.powerSource;
         gs.powered = ps == "always" || (ps == "engine" ? g_engine.load() : g_electric.load());
         gs.paused = g_paused;
-        unsigned long long radioAt = D3D11Overlay::ForeignScreenDrawAt();
-        gs.radioOnScreen = radioSeen && radioAt && now - radioAt < 350;
+        if (auto* r = RadioLink::Get()) {   // linked with Realistic Radio: same screen as the radio, wait while it shows a card
+            int w, h, f, fy, fx; float x, y, aw, ah;
+            if (cfg.screen.followRadio && r->radio_screen(&w, &h, &f, &x, &y, &aw, &ah, &fy, &fx))
+                display.FollowScreen(w, h, f, x, y, aw, ah, fy != 0, fx != 0);
+            gs.radioOnScreen = r->radio_card_showing() != 0;
+        }
         display.Tick(gs);
         // wait up to 50 ms, but wake up at once for window messages (menu, overlay window) and pump them
         MsgWaitForMultipleObjectsEx(0, nullptr, 50, QS_ALLINPUT, MWMO_INPUTAVAILABLE);

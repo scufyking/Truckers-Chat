@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(trucker_chat VERSION 0.1.0 LANGUAGES CXX)
+project(trucker_chat VERSION 0.1.1 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -28,7 +28,7 @@ enable_language(RC)
 add_library(trucker-chat SHARED
     ${TC_CORE}
     src/Plugin.cpp src/Common.cpp src/Config.cpp src/EmbeddedData.cpp src/Http.cpp src/ChatSource.cpp
-    src/TwitchSource.cpp src/YouTubeSource.cpp src/GlyphGdi.cpp src/D3D11Overlay.cpp src/ChatDisplay.cpp src/InputManager.cpp src/MenuWindow.cpp
+    src/TwitchSource.cpp src/YouTubeSource.cpp src/GlyphGdi.cpp src/D3D11Overlay.cpp src/ChatDisplay.cpp src/InputManager.cpp src/MenuWindow.cpp src/RadioLink.cpp
     ${CMAKE_BINARY_DIR}/resources.rc
     src/exports.def)
 target_include_directories(trucker-chat PRIVATE src third_party sdk/include)

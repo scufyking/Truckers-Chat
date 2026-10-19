@@ -6,6 +6,7 @@
 #include "D3D11Overlay.h"
 #include "Common.h"
 #include "Logger.h"
+#include "RadioLink.h"
 #include <d3d11_1.h>
 #include <dxgi1_2.h>
 #include <d3dcommon.h>
@@ -13,23 +14,16 @@
 #include <cmath>
 #include <cstring>
 
-#if defined(_MSC_VER) && !defined(__clang__)
-#include <intrin.h>
-#define TC_RETURN_ADDRESS() ((uintptr_t)_ReturnAddress())
-#else
-#define TC_RETURN_ADDRESS() ((uintptr_t)__builtin_return_address(0))
-#endif
 
 namespace {
 // vtable slots (fixed by the COM interface declarations in dxgi.h / d3d11.h):
 //   IDXGISwapChain:      8 Present;  IDXGISwapChain1: 22 Present1
 //   ID3D11DeviceContext: 13 Draw; 33 OMSetRenderTargets; 34 OMSetRenderTargetsAndUnorderedAccessViews
-constexpr int kPresent = 8, kPresent1 = 22, kDraw = 13, kOMSetRT = 33, kOMSetRTUAV = 34;
+constexpr int kPresent = 8, kPresent1 = 22, kOMSetRT = 33, kOMSetRTUAV = 34;
 
 typedef HRESULT(STDMETHODCALLTYPE* PresentFn)(IDXGISwapChain*, UINT, UINT);
 typedef HRESULT(STDMETHODCALLTYPE* Present1Fn)(IDXGISwapChain1*, UINT, UINT, const DXGI_PRESENT_PARAMETERS*);
 typedef HRESULT(WINAPI* D3DCompileFn)(LPCVOID, SIZE_T, LPCSTR, const D3D_SHADER_MACRO*, ID3DInclude*, LPCSTR, LPCSTR, UINT, UINT, ID3DBlob**, ID3DBlob**);
-typedef void(STDMETHODCALLTYPE* DrawFn)(ID3D11DeviceContext*, UINT, UINT);
 typedef void(STDMETHODCALLTYPE* OMSetRTFn)(ID3D11DeviceContext*, UINT, ID3D11RenderTargetView* const*, ID3D11DepthStencilView*);
 typedef void(STDMETHODCALLTYPE* OMSetRTUAVFn)(ID3D11DeviceContext*, UINT, ID3D11RenderTargetView* const*, ID3D11DepthStencilView*,
                                               UINT, UINT, ID3D11UnorderedAccessView* const*, const UINT*);
@@ -52,14 +46,14 @@ thread_local bool t_inHook = false;    // we are drawing: ignore our own state c
 thread_local int t_forwarding = 0;     // we are inside a call to the previous pointer: calls now come from further down the chain
 
 // one entry per context vtable we patched
-struct VtHook { void** vt; OMSetRTFn rt; OMSetRTUAVFn rtuav; DrawFn draw; };
+struct VtHook { void** vt; OMSetRTFn rt; OMSetRTUAVFn rtuav; };
 VtHook g_vts[8]; std::atomic<int> g_nVts{0};
 inline const VtHook* FindVt(ID3D11DeviceContext* c) {
     void** vt = *(void***)c; int n = g_nVts.load();
     for (int i = 0; i < n; ++i) if (g_vts[i].vt == vt) return &g_vts[i];
     return n ? &g_vts[0] : nullptr;
 }
-bool g_wantScreenHook = false;
+std::atomic<bool> g_wantScreenHook{false};
 std::atomic<bool> g_screenHooked{false};
 std::atomic<float> g_scrAlpha{0.f};
 std::atomic<int> g_scrW{0}, g_scrH{0}, g_scrFmt{0};
@@ -74,8 +68,6 @@ std::mutex g_statMtx;
 struct StatEntry { int w, h, fmt; long long binds; };
 std::map<long long, StatEntry> g_stats;
 // foreign module (Realistic Radio) detection
-std::atomic<uintptr_t> g_foreignLo{0}, g_foreignHi{0};
-std::atomic<unsigned long long> g_foreignDrawAt{0};
 // render-thread only
 ID3D11RenderTargetView* g_curRtv = nullptr;
 int g_curW = 0, g_curH = 0;
@@ -316,21 +308,6 @@ void STDMETHODCALLTYPE HookOMSetRTUAV(ID3D11DeviceContext* ctx, UINT num, ID3D11
     }
     ++t_forwarding; FindVt(ctx)->rtuav(ctx, num, views, dsv, uavStart, numUav, uavs, counts); --t_forwarding;
 }
-// Only patched while a foreign module range is set. Cost per game draw call: one range compare.
-void STDMETHODCALLTYPE HookDraw(ID3D11DeviceContext* ctx, UINT count, UINT start) {
-    uintptr_t ra = TC_RETURN_ADDRESS();
-    if (ra >= g_foreignLo.load(std::memory_order_relaxed) && ra < g_foreignHi.load(std::memory_order_relaxed)) {
-        ID3D11RenderTargetView* rtv = nullptr;
-        ctx->OMGetRenderTargets(1, &rtv, nullptr);
-        if (rtv) {
-            D3D11_TEXTURE2D_DESC d;
-            if (SizeOfRtv(rtv, d) && (int)d.Width == g_scrW.load() && (int)d.Height == g_scrH.load()) g_foreignDrawAt = GetTickCount64();
-            rtv->Release();
-        }
-    }
-    FindVt(ctx)->draw(ctx, count, start);
-}
-
 DXGI_FORMAT RtvFormat(DXGI_FORMAT f) {
     switch (f) {
     case DXGI_FORMAT_R8G8B8A8_TYPELESS: return DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -355,9 +332,8 @@ bool PatchSlot(void** vt, int idx, void* fn, void** orig) {
 // Hooks the immediate context the game really uses (render thread, from Present). Checked every frame.
 void HookGameContext(IDXGISwapChain* sc) {
     if (!g_wantScreenHook) return;
-    bool wantDraw = g_foreignHi.load() != 0;
     int n = g_nVts.load();
-    if (n > 0 && (!wantDraw || g_vts[n - 1].draw)) {
+    if (n > 0) {
         // fast path: already hooked; a new context class would be rare, check only once per ~second
         static int skip = 0;
         if (++skip % 60) return;
@@ -370,18 +346,13 @@ void HookGameContext(IDXGISwapChain* sc) {
         int idx = -1;
         for (int i = 0; i < g_nVts.load(); ++i) if (g_vts[i].vt == cvt) idx = i;
         if (idx < 0 && g_nVts.load() < 8) {
-            VtHook h{cvt, nullptr, nullptr, nullptr};
-            if (PatchSlot(cvt, kOMSetRT, (void*)&HookOMSetRT, (void**)&h.rt) && PatchSlot(cvt, kOMSetRTUAV, (void*)&HookOMSetRTUAV, (void**)&h.rtuav)) {
-                idx = g_nVts.load();
-                g_vts[idx] = h; ++g_nVts; g_screenHooked = true;
+            // store the previous pointers BEFORE patching, so a call that arrives in between always finds them
+            idx = g_nVts.load();
+            g_vts[idx] = VtHook{cvt, (OMSetRTFn)cvt[kOMSetRT], (OMSetRTUAVFn)cvt[kOMSetRTUAV]};
+            ++g_nVts;
+            if (PatchSlot(cvt, kOMSetRT, (void*)&HookOMSetRT, nullptr) && PatchSlot(cvt, kOMSetRTUAV, (void*)&HookOMSetRTUAV, nullptr)) {
+                g_screenHooked = true;
                 Log::Write("Screen: hooked the game's render context #%d (device flags 0x%x)", g_nVts.load(), d->GetCreationFlags());
-            }
-        }
-        if (idx >= 0 && wantDraw && !g_vts[idx].draw) {
-            DrawFn prev = nullptr;
-            if (PatchSlot(cvt, kDraw, (void*)&HookDraw, (void**)&prev)) {
-                g_vts[idx].draw = prev;
-                Log::Write("Screen: watching draw calls of the radio plugin (to avoid drawing over its station display)");
             }
         }
         c->Release();
@@ -445,6 +416,12 @@ HRESULT STDMETHODCALLTYPE HookPresent1(IDXGISwapChain1* sc, UINT sync, UINT flag
 
 namespace D3D11Overlay {
 bool Install() {
+    if (auto* r = RadioLink::Get()) {   // Realistic Radio draws for us: no own hook
+        bool ok = r->attach() != 0;
+        if (g_wantScreenHook) r->enable_screen_hook(1);
+        Log::Write(ok ? "Overlay: drawing through Realistic Radio" : "Overlay: Realistic Radio could not hook Direct3D 11");
+        return ok;
+    }
     // Installed at most once per process: the module is pinned and the globals survive a plugin re-init. Re-patching
     // would store our own hook (or another plugin's hook that already points to ours) as "previous" -> endless loop.
     if (g_vtable) { g_enabled = true; return true; }
@@ -488,28 +465,64 @@ bool Install() {
     Log::Write(ok ? "Overlay: Present hook installed%s" : "Overlay: Present hook NOT installed%s", g_hasPresent1 ? " (incl. Present1)" : "");
     return ok;
 }
-void Uninstall() { g_enabled = false; g_alpha = 0; g_scrAlpha = 0; }
-void EnableScreenHook(bool on) { g_wantScreenHook = on; }
-void SetScreenImage(std::shared_ptr<const Image> img) { std::lock_guard<std::mutex> l(g_scrImgMtx); g_scrImg = std::move(img); ++g_scrImgVersion; }
-void SetScreenTarget(int w, int h, int format) { g_scrW = w; g_scrH = h; g_scrFmt = format; }
-void SetScreenAlpha(float a) { g_scrAlpha = a; }
-void SetScreenArea(float x, float y, float w, float h, bool flipY, bool flipX) { g_areaX = x; g_areaY = y; g_areaW = w; g_areaH = h; g_flipY = flipY; g_flipX = flipX; }
-void SetCollectTargets(bool on) { g_collect = on; }
+void Uninstall() {
+    if (auto* r = RadioLink::Get()) { r->detach(); return; }
+    g_enabled = false; g_alpha = 0; g_scrAlpha = 0;
+}
+void EnableScreenHook(bool on) {
+    if (on && RadioLink::Current() == RadioLink::State::OldRadio) {   // two screen hooks could crash the game
+        static bool told = false;
+        if (!told) { told = true; Log::Write("Screen: not drawing on the truck screen - Realistic Radio is too old (needs 1.4.3), side chat only"); }
+        return;
+    }
+    g_wantScreenHook = on;
+    if (auto* r = RadioLink::Get()) r->enable_screen_hook(on ? 1 : 0);
+}
+void SetScreenImage(std::shared_ptr<const Image> img) {
+    if (auto* r = RadioLink::Get()) { r->chat_screen_image(img ? img->pixels.data() : nullptr, img ? img->width : 0, img ? img->height : 0, img ? img->renderedForScreenHeight : 0); return; }
+    std::lock_guard<std::mutex> l(g_scrImgMtx); g_scrImg = std::move(img); ++g_scrImgVersion;
+}
+void SetScreenTarget(int w, int h, int format) {
+    if (auto* r = RadioLink::Get()) { r->chat_screen_target(w, h, format); return; }
+    g_scrW = w; g_scrH = h; g_scrFmt = format;
+}
+void SetScreenAlpha(float a) {
+    if (auto* r = RadioLink::Get()) { r->chat_screen_alpha(a); return; }
+    g_scrAlpha = a;
+}
+void SetScreenArea(float x, float y, float w, float h, bool flipY, bool flipX) {
+    if (auto* r = RadioLink::Get()) { r->chat_screen_area(x, y, w, h, flipY ? 1 : 0, flipX ? 1 : 0); return; }
+    g_areaX = x; g_areaY = y; g_areaW = w; g_areaH = h; g_flipY = flipY; g_flipX = flipX;
+}
+void SetCollectTargets(bool on) {
+    if (auto* r = RadioLink::Get()) { r->collect_targets(on ? 1 : 0); return; }
+    g_collect = on;
+}
 std::vector<RenderTargetStat> TakeTargetStats() {
-    std::lock_guard<std::mutex> l(g_statMtx);
     std::vector<RenderTargetStat> v;
+    if (auto* r = RadioLink::Get()) {
+        long long buf[64 * 4];
+        int n = r->take_target_stats(buf, 64);
+        for (int i = 0; i < n; ++i) v.push_back({(int)buf[i * 4], (int)buf[i * 4 + 1], (int)buf[i * 4 + 2], buf[i * 4 + 3]});
+        return v;
+    }
+    std::lock_guard<std::mutex> l(g_statMtx);
     for (auto& e : g_stats) v.push_back({e.second.w, e.second.h, e.second.fmt, e.second.binds});
     g_stats.clear();
     return v;
 }
-bool ScreenHookActive() { return g_wantScreenHook && g_vtable != nullptr; }
-long long RenderTargetCalls() { return g_rtCalls; }
-void SetImage(std::shared_ptr<const Image> img) { std::lock_guard<std::mutex> l(g_imgMtx); g_img = std::move(img); ++g_imgVersion; }
-void SetAlpha(float a) { g_alpha = a; }
-void SetPlacement(int anchor, float ox, float oy) { g_anchor = anchor; g_offX = ox; g_offY = oy; }
-long long D3D11Frames() { return g_d3d11Frames; }
-long long OtherFrames() { return g_otherFrames; }
-int ScreenHeight() { return g_screenH; }
-void SetForeignModule(uintptr_t base, uintptr_t end) { g_foreignLo = base; g_foreignHi = end; }
-unsigned long long ForeignScreenDrawAt() { return g_foreignDrawAt; }
+bool ScreenHookActive() {
+    if (auto* r = RadioLink::Get()) return g_wantScreenHook && r->screen_hook_active() != 0;
+    return g_wantScreenHook && g_vtable != nullptr;
+}
+long long RenderTargetCalls() { if (auto* r = RadioLink::Get()) return r->render_target_calls(); return g_rtCalls; }
+void SetImage(std::shared_ptr<const Image> img) {
+    if (auto* r = RadioLink::Get()) { r->chat_image(img ? img->pixels.data() : nullptr, img ? img->width : 0, img ? img->height : 0, img ? img->renderedForScreenHeight : 0); return; }
+    std::lock_guard<std::mutex> l(g_imgMtx); g_img = std::move(img); ++g_imgVersion;
+}
+void SetAlpha(float a) { if (auto* r = RadioLink::Get()) { r->chat_alpha(a); return; } g_alpha = a; }
+void SetPlacement(int anchor, float ox, float oy) { if (auto* r = RadioLink::Get()) { r->chat_placement(anchor, ox, oy); return; } g_anchor = anchor; g_offX = ox; g_offY = oy; }
+long long D3D11Frames() { if (auto* r = RadioLink::Get()) return r->d3d11_frames(); return g_d3d11Frames; }
+long long OtherFrames() { if (auto* r = RadioLink::Get()) return r->other_frames(); return g_otherFrames; }
+int ScreenHeight() { if (auto* r = RadioLink::Get()) return r->screen_height(); return g_screenH; }
 }

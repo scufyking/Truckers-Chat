@@ -6,7 +6,7 @@ for a few seconds on the in-cab navigation screen (optionally also as a bar at t
 
 *Deutsch: siehe [README.de.md](README.de.md).*
 
-> ⚠️ **Status: version 0.1.0 Alpha – compiles, NOT yet tested in the game.**
+> ⚠️ **Status: version 0.1.1 Alpha – compiles, NOT yet tested in the game.**
 > The DLL was built with llvm-mingw; the platform-independent parts (chat parsers, filters, word wrap, card rendering) are
 > covered by unit tests. Everything that needs the game, Windows graphics or the real chat servers is untested – see
 > [What can only be tested in the game](#what-can-only-be-tested-in-the-game).
@@ -24,7 +24,7 @@ for a few seconds on the in-cab navigation screen (optionally also as a bar at t
 
 ## Menu
 
-`Ctrl+9` opens/closes a settings window on top of the game, used **with the mouse**: chat on/off (applies at once), **display time** per message ("Anzeigedauer", 1–120 s, applies at once), **"Dauerhaft einblenden"** (newest messages stay on the screen as a list, also `Ctrl+Shift+D` / `display.alwaysVisible`), Twitch on + channel,
+`Ctrl+9` opens/closes a settings window on top of the game, used **with the mouse**: chat on/off (applies at once), **display target** (truck navigation screen / **side chat on the left like TruckersMP** / both – the side chat draws into the game picture only, so it never overlaps Realistic Radio's station card; settings under `side`), **display time** per message ("Anzeigedauer", 1–120 s, applies at once), **"Dauerhaft einblenden"** (newest messages stay on the screen as a list, also `Ctrl+Shift+D` / `display.alwaysVisible`), Twitch on + channel,
 YouTube on + API key, paste the **stream link** ("Aus Zwischenablage einfügen" / "Link übernehmen"), connection status, and the menu key
 itself (click the field and press the new combination). "Speichern" writes `trucker-chat.json` and reconnects the sources – no restart.
 While the menu is active the game gets no keyboard/mouse input. It is a normal Windows window: in *exclusive* fullscreen Windows may minimise
@@ -79,12 +79,21 @@ Other trucks: `"probe": true` (marks candidate render targets one after another,
 
 ## Together with Realistic Radio
 
-Both plugins only swap single vtable entries (`IDXGISwapChain::Present`, `ID3D11DeviceContext::OMSetRenderTargets(AndUnorderedAccessViews)`)
-and always call the **previous** pointer, so they chain in either load order; calls made by another hook while Trucker Chat forwards are passed through untouched.
-Realistic Radio shows a ~4 s card on the same navigation area when the station/volume changes. With `screen.radioCoexist: "yield"` (default)
-the chat steps aside while that card is visible: Trucker Chat recognises draw calls whose return address lies in `realistic-radio.dll`
-(for this only, `ID3D11DeviceContext::Draw` is also watched) – no change to Realistic Radio. Alternatives: `"ignore"` plus a different `area…`,
-or set Realistic Radio's own `screen.enabled` to `false` in its config.
+Both stay **separate plugins** (`realistic-radio.dll` and `trucker-chat.dll` side by side in `plugins\`).
+
+* **From Realistic Radio 1.4.3 the radio draws the chat.** Trucker Chat sees at start that `realistic-radio.dll` is loaded and then
+  does **not** hook Direct3D at all: it hands its pictures to the radio, whose hook draws the radio first and then the chat. Two hooks
+  on the same functions could crash the game; with a single hook that is gone. The log says `Realistic Radio: linked`.
+* **Same navigation area:** the chat draws where the radio draws – drawing surface, area and flip come from Realistic Radio's truck
+  presets and change with the truck. Own values for the chat: `"screen": { "followRadio": false }`.
+* **The chat waits for the radio:** while the radio shows a card (station change, volume, start logo) a message appears afterwards
+  (`screen.radioCoexist: "yield"`, default). If the radio display is pinned on the screen, the chat is drawn on top.
+* Typing in the chat menu does not control the radio (from Realistic Radio 1.4.3).
+* **Older Realistic Radio versions** (up to 1.4.2) lack this interface. Trucker Chat then draws the **side chat only** and not on the
+  navigation screen, so two hooks never touch the screen render targets; the log asks you to update.
+* Without Realistic Radio, Trucker Chat works as before with its own hook.
+* Still separate: folder `trucker-chat\`, mutex `Local\TruckerChatPlugin-<PID>`, log `trucker-chat.log`. The radio's file name can
+  be changed with `screen.radioModule` (default `realistic-radio.dll`).
 
 ## Controls
 
@@ -109,7 +118,7 @@ On Linux/macOS without the toolchain file, the same project builds `tc-tests` (u
 Tested: compilation (no warnings), exports, embedded resources, 106 unit tests under AddressSanitizer, parser fuzzing, card previews.
 **Untested:** loading in ETS2; YouTube web mode against the real site; the menu (focus, mouse, fullscreen behaviour); Twitch/YouTube connections, reconnects, moderation deletes; drawing on the navigation screen
 (orientation, scaling, navigation returning); GDI text with Inter and the Windows fallback fonts; running together with Realistic Radio in
-both load orders incl. "yield"; overlay (D3D11 + window); keys, ignition, pause menu; frame-rate impact. Please attach `trucker-chat\trucker-chat.log` to bug reports.
+both load orders; overlay (D3D11 + window); keys, ignition, pause menu; frame-rate impact. Please attach `trucker-chat\trucker-chat.log` to bug reports.
 
 ## License
 

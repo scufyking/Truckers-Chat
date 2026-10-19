@@ -32,13 +32,18 @@ public:
     void SetPinned(bool on);          // "Dauerhaft einblenden": newest messages stay visible as a list
     bool Pinned() const { return pinned_; }
     void SetDuration(double seconds);   // card and overlay display time
+    void SetTarget(const std::string& t);   // screen | side | both
+    const std::string& Target() const { return target_; }
     void Tick(const GameState& gs);   // ~20x per second
+    // linked with Realistic Radio: draw where the radio draws (its truck presets set the screen for both)
+    void FollowScreen(int w, int h, int format, double x, double y, double aw, double ah, bool flipY, bool flipX);
 private:
     struct Entry {
         ShownMessage m;
         std::string id, userKey, login;
         Platform source = Platform::System;
         bool status = false;
+        ULONGLONG at = 0;
     };
     ShownMessage Make(const ChatMessage& msg, Platform source, bool status);
     void Remove(const std::function<bool(const Entry&)>& pred);
@@ -52,6 +57,8 @@ private:
     int AreaW() const, AreaH() const;
     // overlay
     void TickOverlay(ULONGLONG now, const GameState& gs);
+    float TickSide(ULONGLONG now, bool allowed);
+    void ApplyPlacement();
     void RenderOverlay();
     void UseWindow(bool on);
     void UpdateWindow(float alpha);
@@ -65,6 +72,14 @@ private:
     std::unique_ptr<TextEngine> te_;
     bool d3d_ = false, screenOn_ = false, overlayOn_ = false, window_ = false;
     bool hidden_ = false, paused_ = false, listMode_ = false, pinned_ = false;
+    std::string target_ = "screen";
+    bool showNavi_ = true, showSide_ = false;
+    std::deque<Entry> side_;
+    std::string sideSig_;
+    ULONGLONG sideShownAt_ = 0, sideLastVisible_ = 0;
+    bool sideVisible_ = false;
+    int sideRenderedH_ = 0, curAnchor_ = 1;
+    float curOffX_ = 0, curOffY_ = 0;
     std::deque<Entry> history_, queue_;
     ULONGLONG start_ = 0, lastTick_ = 0;
     // screen state

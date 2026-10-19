@@ -10,6 +10,7 @@
 struct ShownMessage {
     Platform platform = Platform::System;
     std::u32string user, text;     // already sanitised
+    std::u32string time;           // "15:16" (side chat)
     uint32_t color = 0; bool hasColor = false;
     bool action = false, highlight = false;
 };
@@ -37,6 +38,15 @@ std::shared_ptr<Image> RenderList(TextEngine& te, const std::vector<ShownMessage
 // Overlay panel at the top of the game picture, sized for the given back-buffer height.
 std::shared_ptr<Image> RenderOverlayPanel(TextEngine& te, const std::vector<ShownMessage>& msgs, int screenH, double scale,
                                           double widthFraction, const CardOptions& o);
+// Side chat like TruckersMP: one dark strip per line, "15:16 [YT] Name: text", oldest at the top.
+struct SideOptions {
+    double scale = 1.0;
+    double widthFraction = 0.62;   // maximum line width in screen heights
+    bool showTime = true, showTag = true, userColors = true;
+    float background = 0.55f;
+    int maxLinesPerMessage = 3;
+};
+std::shared_ptr<Image> RenderSideChat(TextEngine& te, const std::vector<ShownMessage>& msgs, int screenH, const SideOptions& o);
 // Setup helpers (same idea as Realistic Radio): coordinate grid and test pattern.
 std::shared_ptr<Image> RenderGrid(TextEngine& te, int W, int H, bool flipX, bool flipY);
 std::shared_ptr<Image> RenderProbe(TextEngine& te, const std::u32string& label, int W, int H);

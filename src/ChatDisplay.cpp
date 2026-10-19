@@ -47,7 +47,7 @@ void ChatDisplay::Init(const Config& cfg, const std::wstring& dataDir) {
 
     const ScreenConfig& s = cfg.screen;
     if (s.enabled) {
-        D3D11Overlay::EnableScreenHook(true);
+        D3D11Overlay::EnableScreenHook(cfg.display.target != "side");   // side chat only: no hook on the screen render targets
         D3D11Overlay::SetScreenArea((float)s.areaX, (float)s.areaY, (float)s.areaW, (float)s.areaH, s.flipY, s.flipX);
         collecting_ = s.probe || s.width <= 0 || s.height <= 0;
         D3D11Overlay::SetCollectTargets(collecting_);
@@ -62,13 +62,15 @@ void ChatDisplay::Init(const Config& cfg, const std::wstring& dataDir) {
         }
     }
     overlayOn_ = cfg.overlay.enabled;
-    if (s.enabled || (overlayOn_ && cfg.overlay.mode != "window")) d3d_ = D3D11Overlay::Install();
-    screenOn_ = s.enabled && D3D11Overlay::ScreenHookActive();
+    if (s.enabled || ((overlayOn_ || cfg.display.target != "screen") && cfg.overlay.mode != "window")) d3d_ = D3D11Overlay::Install();
+    screenOn_ = s.enabled && cfg.display.target != "side" && D3D11Overlay::ScreenHookActive();
     if (overlayOn_) {
-        D3D11Overlay::SetPlacement(anchor_, (float)cfg.overlay.offsetX, (float)cfg.overlay.offsetY);
+        ApplyPlacement();
         if (cfg.overlay.mode == "window" || (cfg.overlay.mode == "auto" && !d3d_)) UseWindow(true);
         Log::Write("Overlay: enabled (%s, %s)", cfg.overlay.mode.c_str(), cfg.overlay.position.c_str());
     }
+    curAnchor_ = anchor_; curOffX_ = (float)cfg.overlay.offsetX; curOffY_ = (float)cfg.overlay.offsetY;
+    if (cfg.display.target != "screen") SetTarget(cfg.display.target);
     Log::Write("Display: mode %s, %.1f s per message, min. %.1f s between messages, power source %s",
                cfg.display.mode.c_str(), cfg.display.durationSeconds, cfg.display.minIntervalSeconds, cfg.display.powerSource.c_str());
 }
@@ -78,11 +80,31 @@ void ChatDisplay::Shutdown() {
     UseWindow(false);
 }
 
+void ChatDisplay::FollowScreen(int w, int h, int format, double x, double y, double aw, double ah, bool flipY, bool flipX) {
+    ScreenConfig& s = cfg_.screen;
+    if (!s.enabled || s.probe || s.grid) return;
+    auto same = [](double a, double b) { return std::fabs(a - b) < 1e-4; };
+    if (s.width == w && s.height == h && s.format == format && same(s.areaX, x) && same(s.areaY, y) && same(s.areaW, aw) &&
+        same(s.areaH, ah) && s.flipY == flipY && s.flipX == flipX) return;
+    s.width = w; s.height = h; s.format = format; s.areaX = x; s.areaY = y; s.areaW = aw; s.areaH = ah; s.flipY = flipY; s.flipX = flipX;
+    if (collecting_) { collecting_ = false; D3D11Overlay::SetCollectTargets(false); }
+    D3D11Overlay::SetScreenArea((float)x, (float)y, (float)aw, (float)ah, flipY, flipX);
+    D3D11Overlay::SetScreenTarget(w, h, format);
+    listDirty_ = pinned_ || listDirty_;
+    Log::Write("Screen: following Realistic Radio - target %dx%d (format %d), area %.2f/%.2f %.2fx%.2f -> card %dx%d px",
+               w, h, format, x, y, aw, ah, AreaW(), AreaH());
+}
+
 int ChatDisplay::AreaW() const { return std::max(64, (int)std::lround(cfg_.screen.width * std::clamp(cfg_.screen.areaW, 0.01, 1.0))); }
 int ChatDisplay::AreaH() const { return std::max(64, (int)std::lround(cfg_.screen.height * std::clamp(cfg_.screen.areaH, 0.01, 1.0))); }
 
 ShownMessage ChatDisplay::Make(const ChatMessage& msg, Platform source, bool status) {
     ShownMessage m;
+    {   // local arrival time for the side chat, "15:16"
+        SYSTEMTIME st; GetLocalTime(&st);
+        char t[8]; snprintf(t, sizeof(t), "%02d:%02d", st.wHour, st.wMinute);
+        m.time = DecodeUtf8(t);
+    }
     m.platform = source;
     if (status) {
         m.user = U"Trucker Chat";
@@ -106,22 +128,26 @@ std::vector<ShownMessage> ChatDisplay::Newest(size_t n) const {
 }
 
 void ChatDisplay::ShowStatus(const std::string& text) {
-    if (!screenOn_ || queue_.size() > 50) return;   // status lines are only shown on the truck screen
+    if (queue_.size() > 50) return;
     ChatMessage m; m.text = text;
     Entry e; e.status = true; e.source = Platform::System;
     e.m = Make(m, Platform::System, true);
     e.m.text = te_->Resolve(SanitizeText(DecodeUtf8(text), san_));
-    queue_.push_front(e);   // status lines go first
+    e.at = GetTickCount64();
+    side_.push_back(e);
+    if (showNavi_) queue_.push_front(e);   // status lines go first
 }
 
 void ChatDisplay::OnEvent(const ChatEvent& ev) {
     ULONGLONG now = GetTickCount64();
     switch (ev.kind) {
     case ChatEvent::Kind::Status: {
-        if (!cfg_.display.showStatus || hidden_ || !screenOn_ || queue_.size() > 50) return;
-        Entry e; e.status = true; e.source = ev.platform;
+        if (!cfg_.display.showStatus || hidden_) return;
+        Entry e; e.status = true; e.source = ev.platform; e.at = now;
         e.m = Make(ev.msg, ev.platform, true);
-        queue_.push_front(e);
+        side_.push_back(e);
+        while (side_.size() > 50) side_.pop_front();
+        if (screenOn_ && showNavi_ && queue_.size() <= 50) queue_.push_front(e);
         return;
     }
     case ChatEvent::Kind::DeleteMessage:
@@ -148,10 +174,13 @@ void ChatDisplay::OnEvent(const ChatEvent& ev) {
     e.id = msg.id; e.login = msg.login;
     e.userKey = msg.userId.empty() ? msg.login : msg.userId;
     if (cfg_.logMessages) Log::Write("Chat [%s] %s: %s", PlatformName(msg.platform), msg.user.c_str(), EncodeUtf8(e.m.text).c_str());
+    e.at = now;
     history_.push_back(e);
     while (history_.size() > 50) history_.pop_front();
     if (hidden_) return;
-    if (listMode_ || pinned_) {
+    if (!paused_) { side_.push_back(e); while (side_.size() > 50) side_.pop_front(); }
+    if (!showNavi_) {}
+    else if (listMode_ || pinned_) {
         if (!listDirty_) listDirtyAt_ = std::max<ULONGLONG>(now, lastStart_ + (ULONGLONG)(cfg_.display.minIntervalSeconds * 1000));
         listDirty_ = true;
     } else {
@@ -175,6 +204,7 @@ void ChatDisplay::Remove(const std::function<bool(const Entry&)>& pred) {
     size_t before = history_.size();
     history_.erase(std::remove_if(history_.begin(), history_.end(), pred), history_.end());
     queue_.erase(std::remove_if(queue_.begin(), queue_.end(), pred), queue_.end());
+    side_.erase(std::remove_if(side_.begin(), side_.end(), pred), side_.end());
     ULONGLONG now = GetTickCount64();
     if (show_ == Show::Card && pred(current_) && until_ > now + 400) until_ = now + 400;   // fade out a deleted message
     if (history_.size() != before) {
@@ -215,6 +245,76 @@ void ChatDisplay::SetEnabled(bool on) {
 void ChatDisplay::SetDuration(double seconds) {
     cfg_.display.durationSeconds = seconds;
     cfg_.overlay.durationSeconds = seconds;
+}
+
+void ChatDisplay::ApplyPlacement() {
+    if (showSide_) { curAnchor_ = 3; curOffX_ = (float)cfg_.side.offsetX; curOffY_ = (float)cfg_.side.offsetY; }   // bottom-left, grows upwards
+    else { curAnchor_ = anchor_; curOffX_ = (float)cfg_.overlay.offsetX; curOffY_ = (float)cfg_.overlay.offsetY; }
+    D3D11Overlay::SetPlacement(curAnchor_, curOffX_, curOffY_);
+}
+
+void ChatDisplay::SetTarget(const std::string& t) {
+    std::string target = (t == "side" || t == "both") ? t : "screen";
+    bool side = target != "screen", navi = target != "side";
+    target_ = target;
+    if (navi && !cfg_.screen.enabled) Log::Write("Display: the truck screen is switched off (screen.enabled = false)");
+    if (navi && cfg_.screen.enabled && !screenOn_) {   // started as side chat only: hook the screen render targets now
+        if (!d3d_) d3d_ = D3D11Overlay::Install();
+        D3D11Overlay::EnableScreenHook(true);
+        screenOn_ = D3D11Overlay::ScreenHookActive();
+        Log::Write("Display: truck screen hook %s", screenOn_ ? "enabled" : "NOT available");
+    }
+    if (side && !d3d_ && cfg_.overlay.mode != "window") d3d_ = D3D11Overlay::Install();
+    bool wasSide = showSide_;
+    showSide_ = side; showNavi_ = navi;
+    if (!navi) { show_ = Show::None; queue_.clear(); listDirty_ = false; D3D11Overlay::SetScreenAlpha(0.f); }
+    if (side && (cfg_.overlay.mode == "window" || !d3d_)) UseWindow(true);
+    if (wasSide && !side) {
+        sideSig_.clear(); sideVisible_ = false;
+        if (overlayOn_) ovDirty_ = true;
+        else { D3D11Overlay::SetAlpha(0.f); UseWindow(false); }
+    }
+    if (side && !wasSide) { sideSig_.clear(); sideVisible_ = false; }
+    ApplyPlacement();
+    Log::Write("Display target: %s", target_.c_str());
+}
+
+float ChatDisplay::TickSide(ULONGLONG now, bool allowed) {
+    std::vector<ShownMessage> vis;
+    std::string sig;
+    if (allowed) {
+        const ULONGLONG life = (ULONGLONG)(cfg_.display.durationSeconds * 1000);
+        std::vector<const Entry*> pick;
+        for (auto it = side_.rbegin(); it != side_.rend() && (int)pick.size() < cfg_.side.lines; ++it) {
+            if (!pinned_ && now - it->at >= life) break;   // older lines have expired as well
+            pick.push_back(&*it);
+        }
+        for (auto it = pick.rbegin(); it != pick.rend(); ++it) {
+            vis.push_back((*it)->m);
+            sig += (*it)->id + "|" + std::to_string((*it)->at) + ";";
+        }
+    }
+    int h = D3D11Overlay::ScreenHeight();
+    if (!h && window_) { if (!game_ || !IsWindow(game_)) game_ = FindGameWindow(); RECT r{}; if (game_ && GetClientRect(game_, &r)) h = r.bottom - r.top; }
+    if (h < 200) h = 1080;
+    if (!vis.empty() && (sig != sideSig_ || std::abs(h - sideRenderedH_) > 2)) {
+        SideOptions so;
+        so.scale = cfg_.side.scale; so.widthFraction = cfg_.side.width; so.background = (float)cfg_.side.background;
+        so.showTime = cfg_.side.showTime; so.showTag = cfg_.side.showTag; so.userColors = cfg_.display.userColors;
+        so.maxLinesPerMessage = cfg_.side.linesPerMessage;
+        ovImage_ = RenderSideChat(*te_, vis, h, so);
+        D3D11Overlay::SetImage(ovImage_);
+        lastImg_ = nullptr;
+        sideRenderedH_ = h; sideSig_ = sig;
+    }
+    if (!vis.empty()) {
+        if (!sideVisible_) { sideShownAt_ = now; sideVisible_ = true; }
+        sideLastVisible_ = now;
+        return std::min(1.f, (now - sideShownAt_) / 250.f);
+    }
+    if (sideVisible_) { sideVisible_ = false; sideSig_.clear(); }
+    float a = 1.f - (now - sideLastVisible_) / 400.f;   // the last image fades out
+    return a > 0.f ? a : 0.f;
 }
 
 void ChatDisplay::SetPinned(bool on) {
@@ -320,6 +420,11 @@ void ChatDisplay::TickScreen(ULONGLONG now, const GameState& gs) {
         D3D11Overlay::SetScreenAlpha(0.f);
         return;
     }
+    if (!showNavi_) {   // target "side": the navigation screen stays untouched
+        if (show_ != Show::None || !queue_.empty()) { show_ = Show::None; queue_.clear(); listDirty_ = false; }
+        D3D11Overlay::SetScreenAlpha(0.f);
+        return;
+    }
     bool yieldToRadio = s.radioCoexist == "yield" && gs.radioOnScreen;
     if (gs.paused || yieldToRadio) {   // keep the remaining display time for later
         if (show_ != Show::None) { until_ += dt; shownAt_ = std::min<ULONGLONG>(now, shownAt_ + dt); nextScrollAt_ += dt; }
@@ -370,12 +475,15 @@ void ChatDisplay::TickOverlay(ULONGLONG now, const GameState& gs) {
         if (!noD3D11 && window_ && D3D11Overlay::D3D11Frames() > 0) UseWindow(false);
     }
     bool allowed = !hidden_ && gs.powered && !gs.paused;
-    if (allowed && !paused_ && ovDirty_) { RenderOverlay(); ovDirty_ = false; }
-    int h = D3D11Overlay::ScreenHeight();
-    if (ovImage_ && h >= 200 && std::abs(h - ovRenderedH_) > 2) RenderOverlay();   // resolution changed -> crisp text again
     float a = 0.f;
-    if (allowed && ovImage_ && pinned_) a = std::min(1.f, (now - ovShownAt_) / 250.f);
-    else if (allowed && ovImage_ && now < ovUntil_) a = std::min({1.f, (now - ovShownAt_) / 250.f, (ovUntil_ - now) / 400.f});
+    if (showSide_) a = TickSide(now, allowed);
+    else {
+        if (allowed && !paused_ && ovDirty_) { RenderOverlay(); ovDirty_ = false; }
+        int h = D3D11Overlay::ScreenHeight();
+        if (ovImage_ && h >= 200 && std::abs(h - ovRenderedH_) > 2) RenderOverlay();   // resolution changed -> crisp text again
+        if (allowed && ovImage_ && pinned_) a = std::min(1.f, (now - ovShownAt_) / 250.f);
+        else if (allowed && ovImage_ && now < ovUntil_) a = std::min({1.f, (now - ovShownAt_) / 250.f, (ovUntil_ - now) / 400.f});
+    }
     D3D11Overlay::SetAlpha(d3d_ && !window_ ? a : 0.f);
     if (window_) UpdateWindow(a);
 }
@@ -417,9 +525,12 @@ void ChatDisplay::UpdateWindow(float alpha) {
     RECT cr; GetClientRect(game_, &cr);
     POINT tl{0, 0}; ClientToScreen(game_, &tl);
     float sh = (float)(cr.bottom - cr.top), sw = (float)(cr.right - cr.left);
-    if (std::abs(sh - ovImage_->renderedForScreenHeight) > 2 && sh >= 200) { RenderOverlay(); if (!ovImage_) return; }
-    float w = (float)ovImage_->width, h = (float)ovImage_->height, ox = (float)cfg_.overlay.offsetX * sh, oy = (float)cfg_.overlay.offsetY * sh;
-    int a = anchor_;
+    if (std::abs(sh - ovImage_->renderedForScreenHeight) > 2 && sh >= 200) {
+        if (showSide_) { sideSig_.clear(); return; }   // re-rendered at the new size on the next tick
+        RenderOverlay(); if (!ovImage_) return;
+    }
+    float w = (float)ovImage_->width, h = (float)ovImage_->height, ox = curOffX_ * sh, oy = curOffY_ * sh;
+    int a = curAnchor_;
     int x = tl.x + (int)((a % 3 == 0) ? ox : (a % 3 == 1) ? (sw - w) / 2 + ox : sw - w - ox);
     int y = tl.y + (int)((a < 3) ? oy : sh - h - oy);
     if (std::abs(alpha - lastAlpha_) < 0.01f && lastImg_ == ovImage_.get() && lastPos_.x == x && lastPos_.y == y && IsWindowVisible(wnd_)) return;
@@ -445,6 +556,6 @@ void ChatDisplay::UpdateWindow(float alpha) {
 void ChatDisplay::Tick(const GameState& gs) {
     ULONGLONG now = GetTickCount64();
     if (screenOn_) TickScreen(now, gs);
-    if (overlayOn_) TickOverlay(now, gs);
+    if (overlayOn_ || showSide_) TickOverlay(now, gs);
     lastTick_ = now;   // window messages of this thread are pumped by the chat thread (Plugin.cpp)
 }

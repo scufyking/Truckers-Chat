@@ -18,6 +18,7 @@
   "display": {
     "enabled": true,
     "alwaysVisible": false,
+    "target": "screen",
     "mode": "card",
     "durationSeconds": 7,
     "minIntervalSeconds": 1.5,
@@ -53,7 +54,8 @@
     "grid": false,
     "background": 1.0,
     "radioCoexist": "yield",
-    "radioModule": "realistic-radio.dll"
+    "radioModule": "realistic-radio.dll",
+    "followRadio": true
   },
   "overlay": {
     "enabled": false,
@@ -65,6 +67,17 @@
     "width": 0.62,
     "background": 0.82,
     "durationSeconds": 10
+  },
+  "side": {
+    "lines": 8,
+    "linesPerMessage": 3,
+    "offsetX": 0.008,
+    "offsetY": 0.33,
+    "scale": 1.0,
+    "width": 0.62,
+    "background": 0.55,
+    "showTime": true,
+    "showTag": true
   },
   "filters": {
     "hideCommands": true,

@@ -24,6 +24,7 @@ struct YouTubeConfig {
 struct DisplayConfig {
     bool enabled = true;                  // chat display on/off (menu checkbox)
     bool alwaysVisible = false;           // newest messages stay on the screen permanently (list)
+    std::string target = "screen";       // screen (navigation) | side (side chat like TruckersMP) | both
     std::string mode = "card";            // card | list
     double durationSeconds = 7, minIntervalSeconds = 1.5, scrollSeconds = 1.6, textScale = 1.0;
     int listSize = 4, listLines = 2, maxQueue = 8, maxTextLength = 200, maxLines = 5;
@@ -42,6 +43,7 @@ struct ScreenConfig {
     double probeSeconds = 5, background = 1.0;
     std::string radioCoexist = "yield";             // yield | ignore
     std::string radioModule = "realistic-radio.dll";
+    bool followRadio = true;                        // with Realistic Radio 1.4.3+: use the radio's screen (its truck presets)
 };
 struct OverlayConfig {
     bool enabled = false;
@@ -50,12 +52,21 @@ struct OverlayConfig {
     double offsetX = 0, offsetY = 0.02, scale = 1.0, width = 0.62, background = 0.82, durationSeconds = 10;
 };
 
+struct SideConfig {                       // side chat (TruckersMP style), drawn into the game picture
+    int lines = 8;                        // max. lines on screen
+    int linesPerMessage = 3;
+    double offsetX = 0.008, offsetY = 0.33;   // from the bottom-left corner, in screen heights
+    double scale = 1.0, width = 0.62, background = 0.55;
+    bool showTime = true, showTag = true;
+};
+
 struct Config {
     TwitchConfig twitch;
     YouTubeConfig youtube;
     DisplayConfig display;
     ScreenConfig screen;
     OverlayConfig overlay;
+    SideConfig side;
     FilterConfig filters;
     KeyBinding keys[(int)Action::Count];
     int buttons[(int)Action::Count] = {-1, -1, -1, -1, -1, -1};

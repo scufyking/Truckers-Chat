@@ -180,3 +180,49 @@ std::shared_ptr<Image> RenderProbe(TextEngine& te, const std::u32string& label, 
     te.DrawLine(*img, label, f, (W - w) / 2, H / 2 - te.LineHeight(f) / 2, Rgb{1.f, 1.f, 0.2f});
     return img;
 }
+
+std::shared_ptr<Image> RenderSideChat(TextEngine& te, const std::vector<ShownMessage>& msgs, int screenH, const SideOptions& o) {
+    const float s = (float)std::clamp(screenH / 1080.0 * o.scale, 0.4, 4.0);
+    auto U = [&](float v) { return std::max(1, (int)std::lround(v * s)); };
+    Font f{U(17), false}, fb{U(17), true};
+    const int pad = U(6), lh = te.LineHeight(f), gap = U(2);
+    const int maxW = std::max(U(200), (int)std::lround(screenH * o.widthFraction * o.scale));
+    const Rgb grey{0.70f, 0.70f, 0.72f}, white{0.97f, 0.97f, 0.97f};
+    struct Piece { std::u32string t; Font f; Rgb c; int x; };
+    struct Row { std::vector<Piece> pieces; int w; };
+    std::vector<Row> rows;
+    for (const ShownMessage& m : msgs) {
+        std::vector<Piece> pre;
+        int x = pad;
+        auto add = [&](const std::u32string& t, const Font& ft, Rgb c) { if (t.empty()) return; pre.push_back({t, ft, c, x}); x += te.Width(t, ft); };
+        if (o.showTime && !m.time.empty()) add(m.time + U" ", f, grey);
+        if (o.showTag && m.platform != Platform::System) {
+            Rgb tc = RgbFrom(m.platform == Platform::Twitch ? 0xB794FF : 0xFF6B6B);
+            add(m.platform == Platform::Twitch ? U"[TW] " : U"[YT] ", fb, tc);
+        }
+        Rgb nc = NameColor(m, o.userColors);
+        std::u32string name = te.Ellipsize(m.user, fb, maxW * 2 / 5);
+        add(name + (m.action ? U" " : U": "), fb, nc);
+        Rgb textCol = m.platform == Platform::System ? RgbFrom(0xFFC24D) : m.action ? nc : m.highlight ? Rgb{1.f, 0.82f, 0.3f} : white;
+        TextLayout L = te.Wrap(m.text, f, maxW - 2 * pad, std::max(1, o.maxLinesPerMessage), x - pad);
+        for (size_t i = 0; i < L.lines.size(); ++i) {
+            Row r;
+            int start = pad + L.lines[i].indent;
+            if (i == 0) r.pieces = pre;
+            r.pieces.push_back({L.lines[i].text, f, textCol, start});
+            r.w = start + L.lines[i].width + pad;
+            rows.push_back(std::move(r));
+        }
+    }
+    int W = 1, H = 0;
+    for (auto& r : rows) W = std::max(W, r.w);
+    H = (int)rows.size() * (lh + gap);
+    auto img = NewImage(W, std::max(1, H), screenH);
+    int y = 0;
+    for (auto& r : rows) {
+        FillRect(*img, 0, y, r.w, y + lh, Rgb{0.02f, 0.02f, 0.03f}, o.background);
+        for (auto& p : r.pieces) te.DrawLine(*img, p.t, p.f, p.x, y, p.c);
+        y += lh + gap;
+    }
+    return img;
+}

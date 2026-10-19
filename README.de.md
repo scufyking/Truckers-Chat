@@ -6,7 +6,7 @@ Viele Streamer fahren wegen des Urheberrechts ohne Radio. Trucker Chat zeigt sta
 
 *English: see [README.md](README.md).*
 
-> ⚠️ **Stand: Version 0.1.0 Alpha – kompiliert, aber noch NICHT im Spiel getestet.**
+> ⚠️ **Stand: Version 0.1.1 Alpha – kompiliert, aber noch NICHT im Spiel getestet.**
 > Die DLL wurde mit llvm-mingw gebaut, die plattformunabhängigen Teile (Chat-Parser, Filter, Textumbruch, Kartendarstellung)
 > sind mit Unit-Tests geprüft. Alles, was das Spiel, Windows-Grafik oder echte Chat-Server braucht, ist ungetestet –
 > siehe [Was nur im Spiel getestet werden kann](#was-nur-im-spiel-getestet-werden-kann).
@@ -35,6 +35,13 @@ Viele Streamer fahren wegen des Urheberrechts ohne Radio. Trucker Chat zeigt sta
   „Link übernehmen“ (oder Enter) nimmt den eingetippten Link. Status daneben.
 - **Anzeigedauer:** wie viele Sekunden eine Nachricht zu sehen ist (1–120, Pfeile oder eintippen). Wirkt sofort und wird gespeichert;
   gilt für die Karte auf dem Navi und das Overlay (`display.durationSeconds`, `overlay.durationSeconds`). Bei vollem Chat werden Karten automatisch etwas kürzer gezeigt.
+- **Anzeige:** *Navi-Bildschirm im LKW* · *Seitenchat links (wie TruckersMP)* · *Navi + Seitenchat*. Wirkt sofort.
+  Der **Seitenchat** zeigt die Nachrichten links im Bild als Zeilen „15:16 [YT] Name: Text“ auf dunklen Streifen; neue Zeilen kommen
+  unten dazu, jede verschwindet nach der Anzeigedauer (mit „Dauerhaft einblenden“ bleiben sie stehen). Er zeichnet nur ins Spielbild,
+  nicht aufs Navi – damit gibt es **keine Überschneidung mit Realistic Radio**. Einstellungen unter `side` in `trucker-chat.json`
+  (`lines`, `offsetX`, `offsetY` = Abstand vom unteren Rand, `scale`, `width`, `background`, `showTime`, `showTag`).
+
+  ![Seitenchat](docs/preview/side_chat_1080p.png)
 - **Menü-Taste:** Feld anklicken und die neue Kombination drücken (z. B. `Strg+Umschalt+M`); eine Taste ohne Strg/Umschalt/Alt bekommt automatisch `Strg` dazu.
 - **Speichern** schreibt alles in `trucker-chat.json` und verbindet Twitch/YouTube bei Änderungen neu – ohne Neustart.
 
@@ -143,17 +150,22 @@ flipY true, areaX 0.1, areaY 0.3, areaW 0.8, areaH 0.4`. Die Karte wird in der P
 
 ## Zusammen mit Realistic Radio
 
-* Getrennt: `trucker-chat.dll`, Ordner `trucker-chat\`, Mutex `Local\TruckerChatPlugin-<PID>`, Fensterklassen
-  `TruckerChatDummyD3D`/`TruckerChatOverlay`, Log `trucker-chat.log`.
-* **Hooks verketten sich:** Beide Plugins ersetzen in den Tabellen von `IDXGISwapChain::Present` und
-  `ID3D11DeviceContext::OMSetRenderTargets(AndUnorderedAccessViews)` nur einen Zeiger und rufen den **vorherigen** immer auf –
-  egal, welches Plugin zuerst lädt. Aufrufe, die während des Weiterleitens von einem anderen Hook kommen, reicht Trucker Chat unverändert durch.
-* **Gleiche Navi-Fläche:** Realistic Radio zeigt bei Senderwechsel/Lautstärke ca. 4 s eine Karte auf demselben Navi-Bereich.
-  Mit `screen.radioCoexist: "yield"` (Standard) **weicht der Chat aus**: Trucker Chat erkennt – ohne jede Änderung an Realistic Radio –,
-  wann dessen DLL (`radioModule`) in die Navi-Fläche zeichnet (nur dafür wird zusätzlich `ID3D11DeviceContext::Draw` beobachtet; Rücksprungadresse
-  liegt im Modul `realistic-radio.dll`). Solange blendet der Chat aus, die Restzeit der Chat-Karte wird aufgehoben. Danach geht es weiter.
-* Alternativen: `"radioCoexist": "ignore"` und einen anderen Bereich wählen (z. B. `areaY`/`areaH` für die untere Hälfte), oder
-  in Realistic Radio dessen eigene Einstellung `screen.enabled: false` setzen (nur Konfiguration, keine Code-Änderung).
+Beide bleiben **eigenständige Plugins** (`realistic-radio.dll` und `trucker-chat.dll` nebeneinander im Ordner `plugins\`).
+
+* **Ab Realistic Radio 1.4.3 zeichnet das Radio den Chat mit.** Trucker Chat erkennt beim Start, dass `realistic-radio.dll`
+  geladen ist, und hängt sich dann **gar nicht** an Direct3D. Es gibt seine Bilder an das Radio weiter, und dessen Hook zeichnet
+  erst das Radio, dann den Chat. Zwei Hooks an denselben Stellen konnten das Spiel abstürzen lassen – mit nur einem Hook fällt das weg.
+  Im Log steht dann `Realistic Radio: linked`.
+* **Gleicher Navi-Bereich:** Der Chat zeichnet dort, wo das Radio zeichnet – Zeichenfläche, Bereich und Drehung kommen aus den
+  LKW-Presets von Realistic Radio und wechseln mit dem LKW mit. Eigene Werte für den Chat: `"screen": { "followRadio": false }`.
+* **Der Chat wartet auf das Radio:** Zeigt das Radio gerade eine Karte (Senderwechsel, Lautstärke, Start-Logo), erscheint die
+  Nachricht danach (`screen.radioCoexist: "yield"`, Standard). Ist die Radioanzeige dauerhaft eingeblendet, liegt der Chat darüber.
+* Tasten, die man im Chat-Menü tippt, steuern das Radio nicht (ab Realistic Radio 1.4.3).
+* **Ältere Realistic-Radio-Versionen** (bis 1.4.2) haben diese Schnittstelle nicht. Dann zeichnet Trucker Chat **nur den Seitenchat**
+  und nicht aufs Navi, damit nicht zwei Hooks in die Navi-Zeichenflächen greifen; im Log steht ein Hinweis zum Aktualisieren.
+* Ohne Realistic Radio arbeitet Trucker Chat wie bisher mit eigenem Hook.
+* Getrennt bleiben: Ordner `trucker-chat\`, Mutex `Local\TruckerChatPlugin-<PID>`, Log `trucker-chat.log`. Der Dateiname des
+  Radios lässt sich mit `screen.radioModule` ändern (Standard `realistic-radio.dll`).
 
 ## Bedienung
 
@@ -220,7 +232,7 @@ Vorschaubilder des Karten-Codes. **Nicht getestet – bitte im Spiel prüfen:**
 - [ ] YouTube mit API-Schlüssel: `@Handle`-Auflösung, Live-Suche, Polling, Kontingent-Meldung, Link per `Strg+Umschalt+Y` / `youtube-stream.txt`.
 - [ ] Karte erscheint auf dem Navi (MAN TGX), richtige Ausrichtung, keine Verzerrung, Navi erscheint danach wieder.
 - [ ] GDI-Darstellung mit der eingebetteten Inter-Schrift und den Windows-Ersatzschriften (Kyrillisch, CJK, einfarbige Emojis).
-- [ ] Gleichzeitiger Betrieb mit Realistic Radio in beiden Ladereihenfolgen; „yield“ blendet den Chat während der Radiokarte aus.
+- [ ] Gleichzeitiger Betrieb mit Realistic Radio (Seitenchat und Navi-Modus).
 - [ ] Menü (`Strg+9`): erscheint über dem Spiel, Maus frei, Speichern ohne Neustart, Menü-Taste ändern, Verhalten im exklusiven Vollbild.
 - [ ] Overlay oben (D3D11 und Fenstermodus), Tasten, Zündung aus, Pause-Menü.
 - [ ] Bildrate: keine merkbaren Einbußen.

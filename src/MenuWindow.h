@@ -18,13 +18,15 @@ struct MenuSettings {
     std::string youtubeKey;
     std::string streamLink;
     KeyBinding menuKey;
-    int durationSeconds = 7;        // how long one message stays visible (truck screen card and overlay)
+    int durationSeconds = 7;
+    int target = 0;                 // 0 = Navi, 1 = Seitenchat, 2 = beides
 };
 
 class MenuWindow {
 public:
     std::function<void(bool)> onChat;                        // checkbox "Chat anzeigen" (applies at once)
     std::function<void(bool)> onPinned;                      // checkbox "Dauerhaft einblenden" (applies at once)
+    std::function<void(int)> onTarget;                       // "Anzeige": 0 Navi, 1 Seitenchat, 2 beides (applies at once)
     std::function<void(int)> onDuration;                     // "Anzeigedauer" in seconds (applies at once)
     std::function<void(const std::string&)> onLink;          // text of the stream link field (applies at once)
     std::function<void(const MenuSettings&)> onSave;         // "Speichern"

@@ -157,6 +157,13 @@ int main(int argc, char** argv) {
     WritePng(out + "/overlay_1080p.png", *RenderOverlayPanel(te, {twitch, yt, act, cyr}, 1080, 1.0, 0.62, ov), false);
     WritePng(out + "/grid_1024.png", *RenderGrid(te, 1024, 1024, false, true), false);
     WritePng(out + "/probe.png", *RenderProbe(te, U"3/7  1024x1024  f29", 512, 512), false);
+    {   // side chat (TruckersMP style)
+        std::vector<ShownMessage> side = {cyr, yt, act, twitch, sc};
+        const char* times[] = {"15:14", "15:15", "15:15", "15:16", "15:16"};
+        for (size_t i = 0; i < side.size(); ++i) side[i].time = DecodeUtf8(times[i]);
+        SideOptions so;
+        WritePng(out + "/side_chat_1080p.png", *RenderSideChat(te, side, 1080, so), false);
+    }
     printf("long text: %d lines, %d visible\n", total, vis);
     return 0;
 }

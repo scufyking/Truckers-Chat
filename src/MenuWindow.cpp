@@ -13,7 +13,7 @@ enum Id {
     kChat = 101, kPinned = 102,
     kTwitchOn = 110, kTwitchChannel = 111, kTwitchStatus = 112,
     kYouTubeOn = 120, kYouTubeKey = 121, kLink = 122, kPaste = 123, kApplyLink = 124, kYouTubeStatus = 125,
-    kHotkey = 130, kDuration = 131, kDurationSpin = 132, kNote = 140,
+    kHotkey = 130, kDuration = 131, kDurationSpin = 132, kTarget = 133, kNote = 140,
 };
 std::wstring W(const std::string& s) { return Utf8ToWide(s); }
 }
@@ -50,7 +50,7 @@ void MenuWindow::Create() {
     bold_ = CreateFontW(-S(20), 0, 0, 0, FW_SEMIBOLD, 0, 0, 0, DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
     small_ = CreateFontW(-S(13), 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
     const DWORD style = WS_POPUP | WS_CAPTION | WS_SYSMENU, ex = WS_EX_TOPMOST | WS_EX_TOOLWINDOW;
-    RECT r{0, 0, S(470), S(502)};
+    RECT r{0, 0, S(470), S(536)};
     AdjustWindowRectEx(&r, style, FALSE, ex);
     wnd_ = CreateWindowExW(ex, Names::kMenuWindowClass, L"Trucker Chat " TC_WIDEN(TC_VERSION), style, 0, 0, r.right - r.left, r.bottom - r.top,
                            nullptr, nullptr, hi, this);
@@ -85,7 +85,7 @@ void MenuWindow::Create() {
     add(L"BUTTON", L"Aus Zwischenablage einfügen", button, kPaste, 120, 300, 200, 30);
     add(L"BUTTON", L"Link übernehmen", button, kApplyLink, 326, 300, 120, 30);
 
-    add(L"BUTTON", L"Bedienung", BS_GROUPBOX, -1, 10, 352, 450, 96);
+    add(L"BUTTON", L"Bedienung", BS_GROUPBOX, -1, 10, 352, 450, 130);
     add(L"STATIC", L"Menü-Taste:", SS_LEFT, -1, 24, 378, 94, 20);
     HWND hk = add(HOTKEY_CLASSW, L"", WS_TABSTOP, kHotkey, 120, 374, 150, 26);
     SendMessageW(hk, HKM_SETRULES, (WPARAM)HKCOMB_NONE, MAKELPARAM(HOTKEYF_CONTROL, 0));   // a bare key gets Ctrl added
@@ -100,9 +100,14 @@ void MenuWindow::Create() {
     SendMessageW(spin, UDM_SETRANGE32, 1, 120);
     add(L"STATIC", L"Sekunden pro Nachricht (1\u2013120)", SS_LEFT, -1, 186, 414, 260, 20, small_);
 
-    add(L"STATIC", L"", SS_LEFT | SS_ENDELLIPSIS, kNote, 16, 466, 200, 22, small_);
-    add(L"BUTTON", L"Speichern", button | BS_DEFPUSHBUTTON, IDOK, 240, 460, 104, 32);
-    add(L"BUTTON", L"Schließen", button, IDCANCEL, 352, 460, 104, 32);
+    add(L"STATIC", L"Anzeige:", SS_LEFT, -1, 24, 448, 94, 20);
+    HWND tgt = add(L"COMBOBOX", L"", WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL, kTarget, 120, 444, 326, 120);
+    for (const wchar_t* item : {L"Navi-Bildschirm im LKW", L"Seitenchat links (wie TruckersMP)", L"Navi + Seitenchat"})
+        SendMessageW(tgt, CB_ADDSTRING, 0, (LPARAM)item);
+
+    add(L"STATIC", L"", SS_LEFT | SS_ENDELLIPSIS, kNote, 16, 500, 200, 22, small_);
+    add(L"BUTTON", L"Speichern", button | BS_DEFPUSHBUTTON, IDOK, 240, 494, 104, 32);
+    add(L"BUTTON", L"Schließen", button, IDCANCEL, 352, 494, 104, 32);
 }
 
 void MenuWindow::Destroy() {
@@ -114,6 +119,7 @@ void MenuWindow::Destroy() {
 void MenuWindow::Fill(const MenuSettings& s) {
     filling_ = true;
     SendMessageW(Ctl(kDurationSpin), UDM_SETPOS32, 0, std::clamp(s.durationSeconds, 1, 120));
+    SendMessageW(Ctl(kTarget), CB_SETCURSEL, std::clamp(s.target, 0, 2), 0);
     CheckDlgButton(wnd_, kChat, s.chatOn ? BST_CHECKED : BST_UNCHECKED);
     CheckDlgButton(wnd_, kPinned, s.pinned ? BST_CHECKED : BST_UNCHECKED);
     CheckDlgButton(wnd_, kTwitchOn, s.twitchOn ? BST_CHECKED : BST_UNCHECKED);
@@ -148,6 +154,7 @@ MenuSettings MenuWindow::Read() const {
     s.twitchChannel = Text(kTwitchChannel);
     s.youtubeKey = Text(kYouTubeKey);
     s.durationSeconds = std::clamp(atoi(Text(kDuration).c_str()), 1, 120);
+    s.target = std::clamp((int)SendMessageW(Ctl(kTarget), CB_GETCURSEL, 0, 0), 0, 2);
     s.streamLink = Text(kLink);
     WORD hk = (WORD)SendMessageW(Ctl(kHotkey), HKM_GETHOTKEY, 0, 0);
     BYTE mods = HIBYTE(hk);
@@ -212,6 +219,11 @@ LRESULT MenuWindow::Handle(UINT m, WPARAM wp, LPARAM lp) {
     case WM_CLOSE: Close(); return 0;
     case WM_COMMAND: {
         int id = LOWORD(wp);
+        if (id == kTarget && HIWORD(wp) == CBN_SELCHANGE) {
+            int v = (int)SendMessageW(Ctl(kTarget), CB_GETCURSEL, 0, 0);
+            if (!filling_ && v >= 0 && v <= 2 && onTarget) onTarget(v);
+            return 0;
+        }
         if (id == kDuration && HIWORD(wp) == EN_CHANGE) {
             int v = atoi(Text(kDuration).c_str());
             if (!filling_ && v >= 1 && v <= 120 && onDuration) onDuration(v);

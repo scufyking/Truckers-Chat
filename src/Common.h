@@ -29,7 +29,7 @@ HANDLE StartPinnedThread(DWORD (*fn)(void*), void* arg);
 
 // Unique names of this plugin. Everything differs from Realistic Radio so both run side by side in one game process.
 #ifndef TC_VERSION
-#define TC_VERSION "0.1.0 Alpha"
+#define TC_VERSION "0.1.1 Alpha"
 #endif
 #define TC_WIDEN2(x) L##x
 #define TC_WIDEN(x) TC_WIDEN2(x)
